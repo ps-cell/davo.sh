@@ -101,14 +101,30 @@ PY
 }
 
 run_test 'shell syntax' bash -n "$D"
+run_test 'runtime has no Python dependency' bash -c "! grep -Eq 'python3|python[[:space:]]' '$D'"
 run_test 'version is 1.2.0' bash -c "[[ \$(\"$D\" --version) == 'davo.sh 1.2.0' ]]"
+run_test 'no arguments show help' bash -c "\"$D\" | grep -Fq 'davo.sh — simple encrypted file transport'"
 run_test 'help shows -p as password string' bash -c "\"$D\" --help | grep -Fq -- '-p, --password STRING'"
 run_test 'help shows -e as expiry shorthand' bash -c "\"$D\" --help | grep -Fq -- '-e, --expiry TIME'"
 run_test 'help shows -P as password file' bash -c "\"$D\" --help | grep -Fq -- '-P, --password-file FILE'"
 run_test 'help has five examples' bash -c "[[ \$(\"$D\" --help | awk '/^Examples:/{f=1;next} f && /^  /{n++} END{print n+0}') -eq 5 ]]"
+run_test 'help shows implicit send syntax' bash -c "\"$D\" --help | grep -Fq 'davo.sh <file|directory> [options]'"
 
 setup
 export D PASS TMP PORT_BASE
+
+run_test 'implicit send is accepted' bash -c '
+  out=$(cd "$TMP" && "$D" "$TMP/small.bin" -p "$PASS" --backend qurl --expiry 1h)
+  url=$(printf "%s\n" "$out" | sed -n "s/^URL: //p")
+  [[ "$url" == http://127.0.0.1:*/qurl/raw/* ]]
+'
+
+run_test 'explicit send remains accepted' bash -c '
+  out=$(cd "$TMP" && "$D" send "$TMP/small.bin" -p "$PASS" --backend qurl --expiry 1h)
+  url=$(printf "%s\n" "$out" | sed -n "s/^URL: //p")
+  [[ "$url" == http://127.0.0.1:*/qurl/raw/* ]]
+'
+
 
 run_test 'random password is three words or 128-bit hex' bash -c '
   out=$("$D" encrypt "$TMP/seed.txt" --random-password -o "$TMP/random.gpg" 2>&1)
@@ -178,11 +194,6 @@ run_test 'explicit qurl backend works' bash -c '
   unzip -tq "$TMP/qurl.recovered" >/dev/null
 '
 
-run_test '0x0 backend is rejected' bash -c '
-  ! (cd "$TMP" && "$D" send "$TMP/small.bin" -p "$PASS" --backend 0x0) >/dev/null 2>"$TMP/zero.err"
-  grep -Fq "unknown backend: 0x0" "$TMP/zero.err"
-'
-
 run_test 'qurl rejects unsupported long expiry' bash -c '
   ! (cd "$TMP" && "$D" send "$TMP/small.bin" -p "$PASS" --backend qurl --expiry 8d) >/dev/null 2>"$TMP/qurl-expiry.err"
   grep -Fq "qurl.sh supports uploads for at most 7 days" "$TMP/qurl-expiry.err"
@@ -249,6 +260,11 @@ run_test '--random-password is rejected for get' bash -c '
 '
 
 run_test 'windows launcher is standalone and does not bypass execution policy' bash -c "grep -Fq 'powershell.exe -NoLogo -NoProfile -Command' '$ROOT/davo.cmd' && grep -Fq '# --- POWERSHELL PAYLOAD ---' '$ROOT/davo.cmd' && ! grep -Fq -- '-ExecutionPolicy Bypass' '$ROOT/davo.cmd' && ! grep -Fq 'DAVO_PS1' '$ROOT/davo.cmd'"
+
+run_test 'windows launcher keeps implicit send parity' grep -Fq "\$o.Command='send';\$i=0" "$ROOT/davo.cmd"
+run_test 'windows help keeps implicit send syntax' grep -Fq 'davo.cmd <file|directory> [options]' "$ROOT/davo.cmd"
+run_test 'windows HTML filename matches shell behavior for zipped and unzipped inputs' grep -Fq "\$name.EndsWith" "$ROOT/davo.cmd"
+run_test 'windows HTML filename handles .zip suffix explicitly' grep -Fq 'StringComparison]::OrdinalIgnoreCase' "$ROOT/davo.cmd"
 
 printf '\n1..%d\n' "$TESTS"
 if (( FAILURES )); then

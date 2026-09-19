@@ -36,13 +36,13 @@ cat <<'USAGE'
 davo.sh — simple encrypted file transport
 
 Usage:
-  davo.sh send <file|directory> [options]
+  davo.sh <file|directory> [options]
   davo.sh get <url> [options]
   davo.sh encrypt <file> [options]
   davo.sh decrypt <file> [options]
 
 Commands:
-  send       Encrypt a file or directory and upload it (HTML by default, or raw with --no-html).
+  send       Explicit form of the default file/directory upload operation.
   get        Download an HTML or raw encrypted link and recover the original file locally.
   encrypt    Create a local symmetric OpenPGP payload.
   decrypt    Decrypt a local OpenPGP payload.
@@ -84,9 +84,9 @@ davo.sh uses standard symmetric OpenPGP with AES-256 and iterated+salted
   carry a file. With the default auto backend, it tries BobaShare, then qurl.sh.
 
 Examples:
-  davo.sh send project.zip
-  davo.sh send project-directory --backend qurl
-  davo.sh send project.zip -p 'correct horse battery staple'
+  davo.sh project.zip
+  davo.sh project-directory --backend qurl
+  davo.sh project.zip -p 'correct horse battery staple'
   davo.sh get 'https://...' -P password.txt
   davo.sh encrypt project.zip -o project.gpg
 USAGE
@@ -94,7 +94,18 @@ USAGE
 
 need() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
 size_of() { stat -c '%s' -- "$1" 2>/dev/null || stat -f '%z' -- "$1"; }
-url_encode_segment() { python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"; }
+url_encode_segment() {
+    local value=$1 out='' c hex i
+    local LC_ALL=C
+    for ((i=0; i<${#value}; i++)); do
+        c=${value:i:1}
+        case "$c" in
+            [a-zA-Z0-9._~-]) out+=$c;;
+            *) printf -v hex '%02X' "'$c"; out+="%$hex";;
+        esac
+    done
+    printf '%s' "$out"
+}
 
 password() {
     local supplied='' file='' from_env=0 random=0 interactive=1
@@ -336,21 +347,49 @@ zip_input() {
 }
 
 render_html() {
-    local payload=$1 filename=$2 output=$3 created_at=$4 expires_at=$5 bundle sha
+    local payload=$1 filename=$2 output=$3 created_at=$4 expires_at=$5 bundle sha data name js
     bundle=$(select_openpgp_bundle)
     sha=$(sha256sum "$bundle" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$bundle" | awk '{print $1}')
-    python3 - "$payload" "$filename" "$output" "$bundle" "$sha" "$created_at" "$expires_at" <<'PY'
-from pathlib import Path
-import base64, json, re, sys
-payload=Path(sys.argv[1]); filename=Path(sys.argv[2]); output=Path(sys.argv[3]); bundle=Path(sys.argv[4]); sha=sys.argv[5]; created_at=int(sys.argv[6]); expires_at=int(sys.argv[7])
-js=bundle.read_text(encoding='utf-8')
-# The bundle may carry a sourceMappingURL. Once the JS is embedded inline,
-# that turns into a relative file request against the recipient's HTML file.
-# Strip it so the decryptor is genuinely self-contained and portable.
-js=re.sub(r'\n?//# sourceMappingURL=.*?(?:\r?\n|$)', '\n', js)
-data=base64.b64encode(payload.read_bytes()).decode('ascii')
-name=json.dumps(filename.name, ensure_ascii=False).replace('<', r'\u003c').replace('>', r'\u003e').replace('&', r'\u0026').replace('\u2028', r'\u2028').replace('\u2029', r'\u2029')
-page=r'''<!doctype html>
+    data=$(openssl base64 -A < "$payload") || die 'could not encode encrypted payload'
+
+    # JSON-encode the filename without requiring a separate scripting runtime.
+    # Work byte-wise so UTF-8 filenames are preserved; escape the characters
+    # that are significant inside a JavaScript string/HTML script element.
+    name=''
+    local LC_ALL=C
+    local c code hex i
+    for ((i=0; i<${#filename}; i++)); do
+        c=${filename:i:1}
+        case "$c" in
+            '"') name+='\\"';;
+            '\\') name+='\\';;
+            '<') name+='\u003c';;
+            '>') name+='\u003e';;
+            '&') name+='\u0026';;
+            $'\b') name+='\b';;
+            $'\f') name+='\f';;
+            $'\n') name+='\n';;
+            $'\r') name+='\r';;
+            $'\t') name+='\t';;
+            *)
+                printf -v code '%d' "'$c"
+                if (( code < 32 )); then
+                    printf -v hex '%02X' "$code"
+                    name+="\\u00$hex"
+                else
+                    name+=$c
+                fi
+                ;;
+        esac
+    done
+    name="\"$name\""
+
+    # Strip an optional sourceMappingURL line from the embedded bundle. The
+    # bundle is local text and the marker is always the final part of its line.
+    js=$(sed -E 's@//# sourceMappingURL=.*$@@' "$bundle") || die 'could not read OpenPGP bundle'
+
+    cat > "$output" <<EOF
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -380,15 +419,15 @@ button { margin-top: .8rem; cursor: pointer; }
 <p id="status" role="status" aria-live="polite"></p>
 </main>
 <script>
-/* OpenPGP.js 6.3.1 — LGPL-3.0+ — SHA-256: __OPENPGP_SHA256__ */
-__OPENPGP_BUNDLE__
+/* OpenPGP.js 6.3.1 — LGPL-3.0+ — SHA-256: $sha */
+$js
 </script>
 <script>
 'use strict';
-const DAVO_PAYLOAD_B64 = '__DAVO_PAYLOAD__';
-const DAVO_FILENAME = __DAVO_FILENAME__;
-const DAVO_CREATED_AT = __DAVO_CREATED_AT__;
-const DAVO_EXPIRES_AT = __DAVO_EXPIRES_AT__;
+const DAVO_PAYLOAD_B64 = '$data';
+const DAVO_FILENAME = $name;
+const DAVO_CREATED_AT = $created_at;
+const DAVO_EXPIRES_AT = $expires_at;
 function expired() { return DAVO_EXPIRES_AT !== 0 && Math.floor(Date.now() / 1000) >= DAVO_EXPIRES_AT; }
 function checkExpiry() { if (expired()) { button.disabled = true; password.disabled = true; setStatus('This davo.sh file has expired.'); return false; } return true; }
 const button = document.getElementById('decrypt');
@@ -427,10 +466,7 @@ checkExpiry();
 </script>
 </body>
 </html>
-'''
-page=page.replace('__OPENPGP_SHA256__',sha).replace('__OPENPGP_BUNDLE__',js).replace('__DAVO_PAYLOAD__',data).replace('__DAVO_FILENAME__',name).replace('__DAVO_CREATED_AT__',str(created_at)).replace('__DAVO_EXPIRES_AT__',str(expires_at))
-output.write_text(page,encoding='utf-8')
-PY
+EOF
 }
 
 backend_expiry_limit() {
@@ -663,23 +699,20 @@ send_cmd() {
 }
 
 extract_html_payload() {
-    local html=$1 out=$2
-    python3 - "$html" "$out" <<'PY'
-from pathlib import Path
-import base64, json, re, sys
-text = Path(sys.argv[1]).read_text(encoding='utf-8')
-m = re.search(r"const DAVO_PAYLOAD_B64 = '([^']+)';", text)
-f = re.search(r"const DAVO_FILENAME = (.*?);", text)
-e = re.search(r"const DAVO_EXPIRES_AT = (\d+);", text)
-if not m or not f or not e:
-    raise SystemExit('not a davo.sh HTML artifact or missing payload metadata')
-name = json.loads(f.group(1))
-if not name or any(sep in name for sep in ('/', '\\')) or name in {'.', '..'}:
-    raise SystemExit('invalid filename in davo.sh HTML artifact')
-Path(sys.argv[2]).write_bytes(base64.b64decode(m.group(1), validate=True))
-Path(sys.argv[2] + '.name').write_text(name, encoding='utf-8')
-Path(sys.argv[2] + '.expires').write_text(e.group(1), encoding='ascii')
-PY
+    local html=$1 out=$2 payload_b64 filename_json expires
+    payload_b64=$(sed -n "s/.*const DAVO_PAYLOAD_B64 = '\([^']*\)';.*/\1/p" "$html" | head -n 1)
+    filename_json=$(sed -n 's/.*const DAVO_FILENAME = \(.*\);/\1/p' "$html" | head -n 1)
+    expires=$(sed -n 's/.*const DAVO_EXPIRES_AT = \([0-9][0-9]*\);.*/\1/p' "$html" | head -n 1)
+    [[ -n "$payload_b64" && -n "$filename_json" && -n "$expires" ]] || return 1
+
+    # The sender emits a JSON string. Bash printf %b understands the JSON
+    # escapes we generate (including \uXXXX), avoiding a JSON runtime here.
+    local name
+    name=$(printf '%b' "$filename_json")
+    [[ -n "$name" && "$name" != '.' && "$name" != '..' && "$name" != */* && "$name" != *\\* ]] || return 1
+    printf '%s' "$name" > "$out.name"
+    printf '%s' "$payload_b64" | openssl base64 -d -A > "$out" || { rm -f -- "$out" "$out.name" "$out.expires"; return 1; }
+    printf '%s' "$expires" > "$out.expires"
 }
 
 get_cmd() {
@@ -746,16 +779,16 @@ main() {
     need openssl
     need gpg
     need curl
-    need python3
     need zip
     case "${1:-}" in
         -h|--help) usage;;
         --version|version) printf 'davo.sh %s\n' "$VERSION";;
+        '') usage;;
         send) (($# >= 2)) || die 'send requires a file or directory'; send_cmd "$2" "${@:3}";;
         get) (($# >= 2)) || die 'get requires a URL'; get_cmd "$2" "${@:3}";;
         encrypt) (($# >= 2)) || die 'encrypt requires a file'; encrypt_cmd "$2" "${@:3}";;
         decrypt) (($# >= 2)) || die 'decrypt requires a file'; decrypt_cmd "$2" "${@:3}";;
-        *) usage; exit 1;;
+        *) send_cmd "$1" "${@:2}";;
     esac
 }
 main "$@"

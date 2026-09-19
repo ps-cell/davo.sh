@@ -2,13 +2,13 @@
 
 Discord filesharing sucks, I don't have dropbox and I don't trust _any_ of these ppl anyways.
 
-`davo.sh` is a slim little file-transfer tool for exactly that situation and reason. No account, no recipient-side installation, and no need to hand somebody a crypto tutorial before sending them a file.
+davo.sh is a slim little file-transfer tool for exactly that situation and reason. No account, no recipient-side installation, and no need to hand somebody a crypto tutorial before sending them a file.
 
 ```bash
-./davo.sh send photo.jpg
+./davo.sh photo.jpg
 ```
 
-The file is encrypted locally before upload. `davo.sh` gives you a link and a passphrase; the recipient can decrypt the file in their browser without installing anything.
+The file is encrypted locally before upload. davo.sh gives you a link and a passphrase; the recipient can decrypt the file in their browser without installing anything.
 
 The plaintext and passphrase are never uploaded.
 
@@ -19,7 +19,8 @@ The plaintext and passphrase are never uploaded.
 - `bash`
 - `curl`
 - `gpg`
-- `zip` (for directories)
+- `openssl`
+- `zip`
 
 ### Windows
 
@@ -32,33 +33,35 @@ The plaintext and passphrase are never uploaded.
 winget install --id GnuPG.GnuPG --exact
 ```
 
-Use the standalone `davo.cmd`. Syntax is the same as for `davo.sh`.
+Use the standalone `davo.cmd`. It does not require a separate script or a PowerShell execution-policy change.
 
 ## Usage
 
 ```bash
-./davo.sh send photo.jpg
-./davo.sh send folder/ -e 24h
+./davo.sh photo.jpg
+./davo.sh folder/
 ./davo.sh get 'https://...'
 ./davo.sh encrypt photo.jpg
 ./davo.sh decrypt photo.jpg.gpg
 ```
 
-`get` accepts both `davo.sh` HTML links and raw encrypted links.
+`send` is the default operation, so `davo.sh photo.jpg` is equivalent to `davo.sh send photo.jpg`. The explicit `send` form remains accepted. The same applies to Windows: `davo.cmd photo.jpg` is equivalent to `davo.cmd send photo.jpg`.
+
+`get` accepts both davo.sh HTML links and raw encrypted links.
 
 `encrypt` and `decrypt` are thin GnuPG wrappers.
 
-Use `--no-html` with `send` to upload raw encrypted OpenPGP instead of generating the browser decryptor.
+Use `--no-html` to upload raw encrypted OpenPGP instead of generating the browser decryptor.
 
-**Uploads expire after 1 hour by default.** Use `--expiry 24h` (or `-e 24h`) to change the expiry.
+Uploads expire after 1 hour by default. Use `--expiry 24h` (or `-e 24h`) to change the expiry. BobaShare allows up to 30 days; qurl.sh allows up to 7 days.
 
 ## Backends
 
 BobaShare is the default backend. `auto` tries BobaShare first and falls back to qurl.sh.
 
 ```bash
-./davo.sh send photo.jpg --backend bobashare
-./davo.sh send photo.jpg --backend qurl
+./davo.sh photo.jpg --backend bobashare
+./davo.sh photo.jpg --backend qurl
 ```
 
 BobaShare supports uploads up to 1 GiB and expiries up to 30 days. qurl.sh supports uploads up to 500 MiB and expiries up to 7 days.

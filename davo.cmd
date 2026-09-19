@@ -501,7 +501,7 @@ function Parse-Args([string[]]$argv) {
 
     if($argv[0] -in @('-h','--help')){$o.Help=$true;return [pscustomobject]$o};if($argv[0] -eq '--version'){$o.Version=$true;return [pscustomobject]$o}
 
-    if($argv[0] -notin @('send','get','encrypt','decrypt')){Die "unknown command: $($argv[0])"};$o.Command=$argv[0];$i=1
+    if($argv[0] -in @('send','get','encrypt','decrypt')){$o.Command=$argv[0];$i=1}else{$o.Command='send';$i=0}
 
     if($i -ge $argv.Count){Die "missing input for $($o.Command)"};$o.Input=$argv[$i];$i++
 
@@ -520,7 +520,7 @@ function Show-Help {
 davo.sh - simple encrypted file transport
 
 Usage:
-  davo.cmd send <file|directory> [options]
+  davo.cmd <file|directory> [options]
   davo.cmd get <url> [options]
   davo.cmd encrypt <file> [options]
   davo.cmd decrypt <file> [options]
@@ -539,11 +539,11 @@ Options:
       --version             Show the version.
 
 Examples:
-  davo.cmd send photo.jpg
-  davo.cmd send project/ --expiry 6h
-  davo.cmd send report.pdf -p 'correct horse battery staple'
+  davo.cmd photo.jpg
+  davo.cmd project/ --expiry 6h
+  davo.cmd report.pdf -p 'correct horse battery staple'
   davo.cmd get 'https://...' -P password.txt
-  davo.cmd send backup.zip --no-html --backend qurl
+  davo.cmd backup.zip --no-html --backend qurl
 '@
 }
 
@@ -573,7 +573,7 @@ function Main([string[]]$argv) {
 
             $payload=Join-Path $script:TMP 'payload.gpg';Write-Output "Encrypting $name ...";Invoke-Gpg $a $source $payload $false
 
-            if($a.NoHtml){$url=Upload $payload "$name.gpg" 'application/octet-stream' $a.Backend $a.Expiry}else{Write-Output 'Packaging recipient HTML ...';$html=Join-Path $script:TMP 'davo.sh.html';$created=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds();$expires=Get-ExpiryTimestamp $a.Expiry;Render-Html $payload $name $html $created $expires;$url=Upload $html (([IO.Path]::GetFileNameWithoutExtension($name))+'.html') 'text/html; charset=utf-8' $a.Backend $a.Expiry}
+            if($a.NoHtml){$url=Upload $payload "$name.gpg" 'application/octet-stream' $a.Backend $a.Expiry}else{Write-Output 'Packaging recipient HTML ...';$html=Join-Path $script:TMP 'davo.sh.html';$created=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds();$expires=Get-ExpiryTimestamp $a.Expiry;Render-Html $payload $name $html $created $expires;$url=Upload $html (if($name.EndsWith('.zip',[StringComparison]::OrdinalIgnoreCase)){$name.Substring(0,$name.Length-4)+'.html'}else{$name+'.html'}) 'text/html; charset=utf-8' $a.Backend $a.Expiry}
 
             Write-Output "`nPassword: $($a._Password)`nURL: $url";return
 
